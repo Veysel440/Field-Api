@@ -3,6 +3,8 @@
 namespace App\Providers;
 
 use Illuminate\Support\ServiceProvider;
+use Monolog\Logger; use Monolog\Processor\UidProcessor; use Monolog\Processor\WebProcessor;
+use Illuminate\Support\Facades\Log;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -14,11 +16,14 @@ class AppServiceProvider extends ServiceProvider
         //
     }
 
-    /**
-     * Bootstrap any application services.
-     */
+
     public function boot(): void
     {
-        //
+        foreach (['stack','request'] as $ch) {
+            Log::channel($ch)->getLogger()->pushProcessor(function(array $record){
+                $record['extra']['request_id'] = request()->header('X-Request-Id');
+                return $record;
+            });
+        }
     }
 }

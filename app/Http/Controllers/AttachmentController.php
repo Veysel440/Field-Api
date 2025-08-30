@@ -28,10 +28,12 @@ class AttachmentController extends Controller
             'path'=>$path,
             'size'=>$file->getSize(),
             'mime'=>$file->getMimeType(),
+            'file'=>'required|file|max:5120|mimetypes:image/png,image/jpeg,application/pdf,application/zip',
+            'entity'=>'required|in:workOrder,asset,customer',
+            'id'=>'required|integer',
+            'note'=>'nullable|string',
         ]);
-        return [
-            'id'=>$att->id,'name'=>$att->name,'size'=>$att->size,
-            'url'=>Storage::disk('public')->url($att->path),'createdAt'=>$att->created_at
-        ];
+        dispatch(new \App\Jobs\ScanAttachment($att->id));
+        return response()->json(['id'=>$att->id,'name'=>$att->name,'size'=>$att->size,'url'=>Storage::url($att->path)],201);
     }
 }
