@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\HealthController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CustomerController;
@@ -17,9 +18,11 @@ Route::get ('/auth/csrf', fn () => response()->json(['ok' => true]));
 Route::get('/assets/map',       [AssetController::class,    'mapPoints']);
 Route::get('/work-orders/map',  [WorkOrderController::class,'mapPoints']);
 
+Route::get('/healthz',[HealthController::class,'healthz']);
+Route::get('/ready',[HealthController::class,'ready']);
+
 
 Route::middleware('auth:sanctum')->group(function () {
-    // Auth
     Route::get ('/auth/me',     [AuthController::class, 'me']);
     Route::post('/auth/logout', [AuthController::class, 'logout']);
 
@@ -47,7 +50,10 @@ Route::middleware('auth:sanctum')->group(function () {
         ->middleware(['role:admin|tech','throttle:api']);
     Route::get ('/work-orders/{workOrder}/attachments', [AttachmentController::class, 'listWO']);
 
-
+    Route::patch('/work-orders/{id}',[WorkOrderController::class,'update'])
+        ->middleware(['role:admin|tech','permission:workorder.update']);
+    Route::post('/work-orders',[WorkOrderController::class,'store'])
+        ->middleware(['role:admin|tech','permission:workorder.create']);
     Route::get  ('/work-orders/{workOrder}/checklist',                      [ChecklistController::class, 'woList']);
     Route::patch('/work-orders/{workOrder}/checklist/{itemId}',             [ChecklistController::class, 'woToggle'])
         ->middleware('role:admin|tech');
