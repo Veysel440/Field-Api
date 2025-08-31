@@ -2,13 +2,20 @@
 
 namespace App\Providers;
 
-class EventServiceProvider
+use App\Models\{Customer, Asset, WorkOrder};
+use App\Observers\{CustomerObserver, AssetObserver, WorkOrderObserver};
+use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
+
+class EventServiceProvider extends ServiceProvider
 {
+    protected $listen = [
+        // ...
+    ];
+
     public function boot(): void
     {
-        \App\Models\Customer::observe(\App\Observers\CustomerObserver::class);
-        \App\Models\Asset::observe(\App\Observers\AssetObserver::class);
-        \App\Models\WorkOrder::observe(\App\Observers\WorkOrderObserver::class);
+        Customer::observe(CustomerObserver::class);
+        Asset::observe(AssetObserver::class);
+        WorkOrder::observe(WorkOrderObserver::class);
     }
-
 }

@@ -2,63 +2,112 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Requests\Auth\LoginRequest;
 use App\Models\RefreshToken;
+use App\Models\User;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Hash;
-use Carbon\Carbon;
+use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
-    public function login(LoginRequest $r) {
-        if (!Auth::attempt($r->only('email','password'))) {
-            return response()->json(['message'=>'Invalid credentials'], 401);
-        }
-        /** @var \App\Models\User $user */
-        $user = $r->user();
+    private function issueTokens(User $user): array
+    {
+        $access = $user->createToken('access')->plainTextToken;
 
-        $access = $user->createToken('access', ['access']);
-        $refreshPlain = Str::random(64);
+        $plain = bin2hex(random_bytes(32));
         RefreshToken::create([
-            'user_id'=>$user->id,
-            'token'=> hash('sha256', $refreshPlain),
-            'expires_at'=> now()->addDays(30),
+            'user_id'    => $user->id,
+            'token_hash' => hash('sha256', $plain),
+            'expires_at' => now()->addDays(14),
         ]);
 
-        return ['accessToken'=>$access->plainTextToken, 'refreshToken'=>$refreshPlain];
+        return ['accessToken'=>$access, 'refreshToken'=>$plain];
     }
 
-    public function me(Request $r) {
-        return $r->user()->only('id','name','email');
+    private function refreshCookie(string $plain): \Symfony\Component\HttpFoundation\Cookie
+    {
+        $secure = app()->isProduction();
+        return cookie(
+            'refresh_token',
+            $plain,
+            60 * 24 * 14,  // 14 gün
+            '/', null, $secure, true, false, 'Strict'
+        );
     }
 
-    public function refresh(Request $r) {
-        $r->validate(['refreshToken'=>['required','string']]);
-        $hash = hash('sha256', $r->string('refreshToken'));
-        $row = RefreshToken::where('token',$hash)->whereNull('revoked_at')->first();
-        if (!$row || $row->expires_at->isPast()) {
-            return response()->json(['message'=>'Invalid refresh token'], 401);
-        }
-        $user = $row->user ?? \App\Models\User::find($row->user_id);
-        $row->update(['revoked_at'=>now()]);
-        $newPlain = Str::random(64);
-        RefreshToken::create([
-            'user_id'=>$user->id,
-            'token'=> hash('sha256', $newPlain),
-            'expires_at'=> now()->addDays(30),
+    public function csrf(): JsonResponse
+    {
+        return response()->json(['ok'=>true])->withCookie(cookie('XSRF-TOKEN', csrf_token(), 120));
+    }
+
+    public function login(Request $r): JsonResponse
+    {
+        $v = $r->validate([
+            'email' => ['required','email'],
+            'password' => ['required','string','min:6'],
         ]);
-        $access = $user->createToken('access', ['access']);
-        return ['accessToken'=>$access->plainTextToken, 'refreshToken'=>$newPlain];
+
+        /** @var User|null $user */
+        $user = User::where('email', $v['email'])->first();
+        if (!$user || !Hash::check($v['password'], $user->password)) {
+            throw ValidationException::withMessages(['email'=>'invalid_credentials']);
+        }
+
+        $pair = $this->issueTokens($user);
+
+        return response()
+            ->json(['accessToken'=>$pair['accessToken'], 'refreshToken'=>$pair['refreshToken'], 'user'=>[
+                'id'=>$user->id,'email'=>$user->email,'role'=>$user->getRoleNames()->first()
+            ]])
+            ->withCookie($this->refreshCookie($pair['refreshToken']));
     }
 
-    public function logout(Request $r) {
+    public function refresh(Request $r): JsonResponse
+    {
+        $plain = $r->cookie('refresh_token') ?: $r->input('refreshToken');
+        if (!$plain) return response()->json(['code'=>'unauthorized','message'=>'no_refresh'], 401);
+
+        $hash = hash('sha256', $plain);
+        $row = RefreshToken::where('token_hash',$hash)->first();
+
+        if (!$row || $row->revoked || ($row->expires_at && $row->expires_at->isPast())) {
+            return response()->json(['code'=>'revoked','message'=>'refresh_revoked'], 401);
+        }
+
+        $user = User::findOrFail($row->user_id);
+
+        $row->revoked = true; $row->save();
+
+        $pair = $this->issueTokens($user);
+
+        return response()
+            ->json(['accessToken'=>$pair['accessToken'], 'refreshToken'=>$pair['refreshToken']])
+            ->withCookie($this->refreshCookie($pair['refreshToken']));
+    }
+
+    public function me(Request $r): JsonResponse
+    {
+        /** @var User $u */
         $u = $r->user();
-        $u?->currentAccessToken()?->delete();
-        if ($rt = $r->string('refreshToken')) {
-            RefreshToken::where('token', hash('sha256',$rt))->update(['revoked_at'=>now()]);
+        return response()->json([
+            'id'=>$u->id,'email'=>$u->email,'name'=>$u->name,
+            'role'=>$u->getRoleNames()->first()
+        ]);
+    }
+
+    public function logout(Request $r): JsonResponse
+    {
+        /** @var User $u */
+        $u = $r->user();
+        if ($t = $r->user()?->currentAccessToken()) $t->delete();
+
+        if ($plain = $r->cookie('refresh_token')) {
+            RefreshToken::where('token_hash', hash('sha256',$plain))->update(['revoked'=>true]);
         }
-        return ['ok'=>true];
+
+        $kill = cookie('refresh_token', '', -1, '/', null, app()->isProduction(), true, false, 'Strict');
+
+        return response()->json(['ok'=>true])->withCookie($kill);
     }
 }

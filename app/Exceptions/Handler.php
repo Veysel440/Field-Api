@@ -6,19 +6,39 @@ use Throwable;
 
 class Handler
 {
-    public function render($request, Throwable $e)
+    public function register(): void
     {
-        $isApi = $request->is('api/*');
-        if (!$isApi) return parent::render($request, $e);
+        $this->renderable(function (\Illuminate\Auth\AuthenticationException $e, $req) {
+            return response()->json(['code'=>'unauthorized','message'=>$e->getMessage() ?: 'unauthorized'], 401);
+        });
 
-        $code = 'server'; $status = 500; $details = null; $msg = 'Server error';
+        $this->renderable(function (\Illuminate\Auth\Access\AuthorizationException $e, $req) {
+            return response()->json(['code'=>'forbidden','message'=>'forbidden'], 403);
+        });
 
-        if ($e instanceof \Illuminate\Auth\AuthenticationException) { $code='unauthorized'; $status=401; $msg='Unauthorized'; }
-        elseif ($e instanceof \Illuminate\Auth\Access\AuthorizationException) { $code='forbidden'; $status=403; $msg='Forbidden'; }
-        elseif ($e instanceof \Illuminate\Validation\ValidationException) { $code='validation'; $status=422; $msg='Validation failed'; $details=$e->errors(); }
-        elseif ($e instanceof \Symfony\Component\HttpKernel\Exception\NotFoundHttpException) { $code='not_found'; $status=404; $msg='Not found'; }
+        $this->renderable(function (\Illuminate\Validation\ValidationException $e, $req) {
+            return response()->json([
+                'code'=>'validation_error',
+                'message'=>'validation_error',
+                'details'=>$e->errors(),
+            ], 422);
+        });
 
-        return response()->json(['code'=>$code,'message'=>$msg,'details'=>$details], $status);
+        $this->renderable(function (\Illuminate\Database\Eloquent\ModelNotFoundException $e, $req) {
+            return response()->json(['code'=>'not_found','message'=>'not_found'], 404);
+        });
+
+        $this->renderable(function (\Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException $e, $req) {
+            $headers = $e->getHeaders() + ['Retry-After' => (string) max(1, (int) ($e->getHeaders()['Retry-After'] ?? 1))];
+            return response()->json(['code'=>'rate_limited','message'=>'rate_limited'], 429, $headers);
+        });
+
+        $this->renderable(function (\Throwable $e, $req) {
+            if (config('app.debug')) {
+                return response()->json(['code'=>'server','message'=>$e->getMessage()], 500);
+            }
+            return response()->json(['code'=>'server','message'=>'server_error'], 500);
+        });
     }
 
 }
